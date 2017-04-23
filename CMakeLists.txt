@@ -70,3 +70,13 @@ target_link_libraries(xethru_map2d
   ${Boost_LIBRARIES}
   ${OpenCV_LIBS}
 )
+
+
+add_executable(ampl2histogram
+  ampl2histogram.cpp
+)
+
+target_link_libraries(ampl2histogram
+  ${Boost_LIBRARIES}
+  ${OpenCV_LIBS}
+)

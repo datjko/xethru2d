@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xethru_map2d>
+  <shared_params>
+    <workarea_map>
+      <map_min_x_in_m v="-4"/>
+      <map_max_x_in_m v="4"/>
+      <map_min_y_in_m v="0"/>
+      <map_max_y_in_m v="8"/>
+      <pixels_in_one_m v="50"/>
+    </workarea_map>
+    <min_amplitude v="0"/>
+    <max_amplitude v="0.002"/>
+  </shared_params>
+  <radars>
+    <radar pos_in_m="0 0"/>
+    <radar pos_in_m="1.2192 0"/>
+    <radar pos_in_m="-2.0193 2.2831298"/>
+  </radars>
+  <files>
+    <file path="C:/p/src/togg/data/Xethru_Data_for_David_April_06/origin_amplitude_0.csv"/>
+    <file path="C:/p/src/togg/data/Xethru_Data_for_David_April_06/endpoint_amplitude_0.csv"/>
+    <file path="C:/p/src/togg/data/Xethru_Data_for_David_April_06/side_amplitude_0.csv"/>
+  </files>
+  <wait_between_frames_in_ms v="330"/>
+</xethru_map2d>

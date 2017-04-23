@@ -1,164 +1,21 @@
-#include <fstream>
+#include "utils.h"
 
-#include "boost/date_time/posix_time/posix_time.hpp" //include all types plus i/o
-#include <boost/filesystem.hpp>
-#include <boost/foreach.hpp>
-#include <boost/exception/all.hpp>
-#include <boost/make_shared.hpp>
-#include <boost/throw_exception.hpp>
+#include <boost/property_tree/xml_parser.hpp>
+#include <boost/property_tree/info_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 
-#include <opencv/cv.h>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
+namespace pt = boost::property_tree; 
+typedef pt::ptree PropTree;
 
-struct Utils {
-    enum Color {
-        Black = 0,
-        White = 1,
-        Grey = 2,
-        Red = 3,
-        Green = 4,
-        Blue = 5,
-        Yellow = 6,
-        Cyan = 7,
-        Magenta = 8,
-        DarkRed = 9,
-        DarkGreen = 10,
-        DarkBlue = 11,
-        DarkYellow = 12,
-        DarkCyan = 13,
-        DarkMagenta = 14,
-        DarkGrey = 15,
-        NumOfColors
-    };
-
-    static cv::Scalar getColor(Color c) {
-        static const cv::Scalar g_colors[NumOfColors] = {
-            cv::Scalar(  0,  0,  0), //Black,
-            cv::Scalar(255,255,255), //White,
-            cv::Scalar(128,128,128), //Grey,
-            cv::Scalar(  0,  0,255), //Red,
-            cv::Scalar(  0,255,  0), //Green,
-            cv::Scalar(255,  0,  0), //Blue,
-            cv::Scalar(  0,255,255), //Yellow,
-            cv::Scalar(255,255,  0), //Cyan,
-            cv::Scalar(255,  0,255), //Magenta,
-            cv::Scalar(  0,  0,128), //DarkRed,
-            cv::Scalar(  0,128,  0), //DarkGreen,
-            cv::Scalar(128,  0,  0), //DarkBlue,
-            cv::Scalar(  0,128,128), //DarkYellow,
-            cv::Scalar(128,128,  0), //DarkCyan,
-            cv::Scalar(128,  0,128), //DarkMagenta,
-            cv::Scalar( 64, 64, 64), //DarkGrey,
-        };
-        if((int)c < 0 || (int)c >= NumOfColors)
-            return cv::Scalar(0,0,128); //: Dark Red to indicate error value
-        return g_colors[c];
+namespace cv {
+    inline std::istream& operator >> (std::istream& stream, cv::Point2f& p) {
+        return stream >> p.x >> std::skipws >> p.y;
     }
 
-
-    template<typename t_CoordType>
-    static cv::Rect_<t_CoordType> inflate(cv::Rect_<t_CoordType> const& r, t_CoordType delta) {
-        return cv::Rect_<t_CoordType>(r.x - delta, r.y - delta, r.width + delta, r.height + delta);
+    inline std::ostream& operator << (std::ostream& stream, cv::Point2f const& p) {
+        return stream << p.x << " " << p.y;
     }
-
-    static cv::Mat getSaturationChannel(cv::Mat const& src_bgr_image) {
-        cv::Mat hsv_image = src_bgr_image.clone();
-        cv::cvtColor(hsv_image, hsv_image, cv::COLOR_BGR2HSV);
-        std::vector<cv::Mat> hsv_channels;
-        cv::split(hsv_image, hsv_channels);
-        return hsv_channels[1];
-    }
-
-    static cv::Mat makeObjectMask(cv::Mat const& src_bgr_image, int saturation_threshold, int brightness_threshold) {
-        cv::Mat hsv_image = src_bgr_image.clone();
-        cv::cvtColor(hsv_image, hsv_image, cv::COLOR_BGR2HSV);
-        std::vector<cv::Mat> hsv_channels;
-        cv::split(hsv_image, hsv_channels);
-//        cv::imshow("image", src_bgr_image);
-//        cv::waitKey();
-//        cv::imshow("saturation", hsv_channels[1]);
-//        cv::waitKey();
-
-//        cv::Mat bright_mask = (hsv_channels[2] >= brightness_threshold)(cv::Rect(1, 1, src_bgr_image.cols - 2, src_bgr_image.rows - 2));
-//        cv::Mat diff_image = singleChannelToMaxDiff(hsv_channels[1]);
-//        for(int diff_threshold = 8; diff_threshold < 60; diff_threshold += 4) {
-//            std::stringstream strstr;
-//            strstr << "saturation diff with diff_threshold = " << diff_threshold;
-//            std::string winname = strstr.str();
-//            cv::imshow(winname, (diff_image < diff_threshold) & bright_mask);
-//            cv::waitKey();
-//            cv::destroyWindow(winname);
-//        }
-        return (hsv_channels[1] < saturation_threshold) & (hsv_channels[2] >= brightness_threshold);
-    }
-
-    static cv::Mat singleChannelToMaxDiff(cv::Mat const& image) {
-        cv::Mat result = singleChannelToMaxDiffAlongNorthEast(image); //: 'NortEast' and 'SouthWest' neighbors
-        result = cv::max(result, singleChannelToMaxDiffAlongShift(image, 1, 0)); //: 'East' and 'West' neighbors
-        result = cv::max(result, singleChannelToMaxDiffAlongShift(image, 1, 1)); //: 'SouthEast' and 'NorthWest' neighbors
-        result = cv::max(result, singleChannelToMaxDiffAlongShift(image, 0, 1)); //: 'South' and 'North' neighbors
-        return result;
-    }
-
-
-    static cv::Mat makeHorizontallyStitchedImage(cv::Mat const& left_image, cv::Mat const& right_image) {
-        int rows = std::max(left_image.size().height, right_image.size().height);
-        int cols = left_image.size().width + 1 + right_image.size().width;
-        cv::Mat result = cv::Mat(rows, cols, CV_8UC3, cv::Scalar(0));
-        left_image.copyTo(result.colRange(0, left_image.size().width).rowRange(0, left_image.size().height));
-        right_image.copyTo(result.colRange(left_image.size().width + 1, cols).rowRange(0, right_image.size().height));
-        return result;
-    }
-
-    static cv::Mat makeVerticallyStitchedImage(cv::Mat const& top_image, cv::Mat const& bottom_image) {
-        int rows = top_image.size().height + 1 + bottom_image.size().height;
-        int cols = std::max(top_image.size().width, bottom_image.size().width);
-        cv::Mat result = cv::Mat(rows, cols, CV_8UC3, cv::Scalar(0));
-        top_image.copyTo(result.colRange(0, top_image.size().width).rowRange(0, top_image.size().height));
-        bottom_image.copyTo(result.colRange(0, bottom_image.size().width).rowRange(top_image.size().height + 1, rows));
-        return result;
-    }
-
-//private:
-    static cv::Mat singleChannelToMaxDiff(cv::Mat const& image1, cv::Mat const& image2) {
-        return cv::max(image1, image2) - cv::min(image1, image2);
-    }
-
-    static cv::Mat singleChannelToShiftDiff(cv::Mat const& image, int shift_x, int shift_y) {
-        cv::Mat image0(image, cv::Rect(0, 0, image.cols - 1, image.rows - 1));
-        cv::Mat image_shifted(image, cv::Rect(shift_x, shift_y, image.cols - 1, image.rows - 1));
-        return singleChannelToMaxDiff(image0, image_shifted);
-    }
-    static cv::Mat singleChannelToShiftMin(cv::Mat const& image, int shift_x, int shift_y) {
-        cv::Mat image0(image, cv::Rect(0, 0, image.cols - 1, image.rows - 1));
-        cv::Mat image_shifted(image, cv::Rect(shift_x, shift_y, image.cols - 1, image.rows - 1));
-        return cv::min(image0, image_shifted);
-    }
-    static cv::Mat shiftDiffToMaxDiffAlongShift(cv::Mat const& shift_diff, int shift_x, int shift_y) {
-        cv::Mat shift_diff0(shift_diff, cv::Rect(0, 0, shift_diff.cols - 1, shift_diff.rows - 1));
-        cv::Mat shifted_back(shift_diff, cv::Rect(shift_x, shift_y, shift_diff.cols - 1, shift_diff.rows - 1));
-        return cv::max(shift_diff0, shifted_back);
-    }
-    static cv::Mat singleChannelToMaxDiffAlongShift(cv::Mat const& image, int shift_x, int shift_y) {
-        return shiftDiffToMaxDiffAlongShift(singleChannelToShiftDiff(image, shift_x, shift_y), shift_x, shift_y);
-    }
-
-    //: ok, let the case shift_x = 1, shift_y = -1 be a special case. let's call it 'NorthEast' shift.
-    static cv::Mat shiftDiffToMaxDiffAlongNorthEast(cv::Mat const& shift_diff) {
-        cv::Mat shift_diff0(shift_diff, cv::Rect(0, 1, shift_diff.cols - 1, shift_diff.rows - 1));
-        cv::Mat shifted_back(shift_diff, cv::Rect(1, 0, shift_diff.cols - 1, shift_diff.rows - 1));
-        return cv::max(shift_diff0, shifted_back);
-    }
-    static cv::Mat singleChannelToMaxDiffAlongNorthEast(cv::Mat const& image) {
-        cv::Mat image0(image, cv::Rect(0, 1, image.cols - 1, image.rows - 1));
-        cv::Mat image_shifted(image, cv::Rect(1, 0, image.cols - 1, image.rows - 1));
-        return shiftDiffToMaxDiffAlongNorthEast(singleChannelToMaxDiff(image0, image_shifted));
-    }
-};
-
-template<typename t_Number>
-inline t_Number sq(t_Number v) { return v * v; }
+}
 
 class Map2d {
 public:
@@ -170,9 +27,9 @@ public:
 
     Map2d() {
         map_min_x_in_m_ = -4;
-        map_min_y_in_m_ = -5;
+        map_min_y_in_m_ =  0;
         map_max_x_in_m_ =  4;
-        map_max_y_in_m_ =  5;
+        map_max_y_in_m_ = 10;
         pixels_in_one_m_ = 50;
     }
 
@@ -185,14 +42,30 @@ public:
 
     template<typename t_cvPointLike>
     cv::Point2i toPixels(t_cvPointLike const& map_2d_coords) const {
-        return cv::Point2i((map_2d_coords.x - map_min_x_in_m_) * pixels_in_one_m_
-            , getHeightInPixels() - (map_2d_coords.y - map_min_y_in_m_) * pixels_in_one_m_);
+        return cv::Point2i((int)((map_2d_coords.x - map_min_x_in_m_) * pixels_in_one_m_ + 0.5)
+            , (int)(getHeightInPixels() - (map_2d_coords.y - map_min_y_in_m_) * pixels_in_one_m_ + 0.5));
     }
 
     template<typename t_cvPointLike>
     cv::Point2f fromPixels(t_cvPointLike const& pixel_2d_coords) const {
         return cv::Point2f(pixel_2d_coords / pixels_in_one_m_ + map_min_x_in_m_
             , getHeightInPixels() - (pixel_2d_coords.y / pixels_in_one_m_ + map_min_y_in_m_));
+    }
+
+
+    void fromPropTree(PropTree const& prop_tree) {
+        map_min_x_in_m_ = prop_tree.get<double>("map_min_x_in_m.<xmlattr>.v");
+        map_max_x_in_m_ = prop_tree.get<double>("map_max_x_in_m.<xmlattr>.v");
+        map_min_y_in_m_ = prop_tree.get<double>("map_min_y_in_m.<xmlattr>.v");
+        map_max_y_in_m_ = prop_tree.get<double>("map_max_y_in_m.<xmlattr>.v");
+        pixels_in_one_m_ = prop_tree.get<double>("pixels_in_one_m.<xmlattr>.v");
+    }
+    void toPropTree(PropTree& prop_tree) const {
+        prop_tree.put("map_min_x_in_m.<xmlattr>.v", map_min_x_in_m_);
+        prop_tree.put("map_max_x_in_m.<xmlattr>.v", map_max_x_in_m_);
+        prop_tree.put("map_min_y_in_m.<xmlattr>.v", map_min_y_in_m_);
+        prop_tree.put("map_max_y_in_m.<xmlattr>.v", map_max_y_in_m_);
+        prop_tree.put("pixels_in_one_m.<xmlattr>.v", pixels_in_one_m_);
     }
 };
 
@@ -204,7 +77,7 @@ inline void makePointDistanceMatrix(cv::Mat_<t_Distance>& result, t_cvPointLike 
         double dy_sq = sq(row - pixel_2d_coords.y);
         for (int col = 0; col < size.width; ++col) {
             double distance_in_pixels = std::sqrt(dy_sq + sq(col - pixel_2d_coords.x));
-            p[col] = (t_Distance)pixel_distance_functor(distance_in_pixels);
+            p[col] = pixel_distance_functor(distance_in_pixels);
         }
     }
 }
@@ -213,12 +86,10 @@ struct RadarRawMeas {
     struct Params {
         double first_bin_offset_in_m_;
         double bin_size_in_m_;
-        double max_amplitude_value_;
 
         Params()
             : first_bin_offset_in_m_(0.0514) //fixme?
             , bin_size_in_m_(0.0514) //fixme?
-            , max_amplitude_value_(0.01) //fixme?
         {}
     };
 
@@ -230,7 +101,7 @@ struct RadarRawMeas {
 
     RadarRawMeas() : radar_index_(0) {}
 
-    int radar_index_;
+    std::size_t radar_index_; //fixme: used for debug only
     std::vector<Bin> bins_;
 };
 
@@ -244,78 +115,89 @@ public:
 };
 
 
-
-template<int c_numOfRadars>
-class RadarsMap2dT {
+class SingleRadarMap2d {
 public:
-    static const int c_NumOfRadars = c_numOfRadars;
+
+    struct SharedParams {
+        Map2d workarea_map_;
+        RadarRawMeas::Params radar_raw_frame_params_;
+        double min_amplitude_value_;
+        double max_amplitude_value_;
+
+        SharedParams()
+            : min_amplitude_value_(0)
+            , max_amplitude_value_(0.1) //fixme?
+        {}
+
+        void fromPropTree(PropTree const& prop_tree) {
+            workarea_map_.fromPropTree(prop_tree.get_child("workarea_map"));
+            min_amplitude_value_ = prop_tree.get<double>("min_amplitude.<xmlattr>.v");
+            max_amplitude_value_ = prop_tree.get<double>("max_amplitude.<xmlattr>.v");
+        }
+        void toPropTree(PropTree& prop_tree) const {
+            workarea_map_.toPropTree(prop_tree.add("workarea_map", ""));
+            prop_tree.put("min_amplitude.<xmlattr>.v", min_amplitude_value_);
+            prop_tree.put("max_amplitude.<xmlattr>.v", max_amplitude_value_);
+        }
+    };
 
     struct Params {
-        Map2d workarea_map_;
-        cv::Point2f radar_pos_in_m_[c_NumOfRadars];
-        RadarRawMeas::Params radar_raw_frame_params_;
+        SharedParams shared_params_;
+        cv::Point2f radar_pos_in_m_;
 
         Params() {}
 
+        Params(SharedParams const& shared_params, cv::Point2f radar_pos_in_m)
+            : shared_params_(shared_params)
+            , radar_pos_in_m_(radar_pos_in_m)
+        {}
+
+        void fromPropTree(PropTree const& prop_tree) {
+            shared_params_.fromPropTree(prop_tree.get_child("shared_params"));
+            radar_pos_in_m_ = prop_tree.get<cv::Point2f>("radar.<xmlattr>.pos_in_m");
+        }
+        void toPropTree(PropTree& prop_tree) const {
+            shared_params_.toPropTree(prop_tree.add("shared_params", ""));
+            prop_tree.put("radar.<xmlattr>.pos_in_m", radar_pos_in_m_);
+        }
     };
 
-    RadarsMap2dT(Params const& params) : params_(params), pix2bins_converter_(params) {
-        setParams(params);
+    SingleRadarMap2d() {}
+
+    SingleRadarMap2d(Params const& params) : params_(params) {
+        onAfterParamsUpdate();
     }
 
     Params const& getParams() const { return params_; }
+
     void setParams(Params const& params) {
         params_ = params;
-        pix2bins_converter_ = Pixels2BinsDistanceConverter(params_);
-        makeMats(params_.workarea_map_.getSizeInPixels());
-        for (int i = 0; i < c_NumOfRadars; ++i)
-            makeRadarDistanceMap(precalculated_radar_distance_maps_in_bins_[i], params_.radar_pos_in_m_[i]);
+        onAfterParamsUpdate();
     }
 
-    cv::Mat getColorMap() const { return color_map_; }
-    cv::Mat_<uchar> getHeatMap() const { return heat_map_; }
+    cv::Mat const& getGreyMap() const { return grey_map_; }
 
-    void plotMeas(RadarRawMeasSet const& meas) {
-        for (std::size_t i = 0; i < meas.size(); ++i)
-            plotMeas(meas[i]);
-        //fixme: make better heat_map_
-        color_map_channels_[2] = heat_map_ = (color_map_channels_[0] & color_map_channels_[1]);
-        cv::merge(color_map_channels_, sizeof(color_map_channels_) / sizeof(color_map_channels_[0]), color_map_);
+    cv::Mat const& plotMeas(RadarRawMeas const& radar_raw_meas) {
+        std::vector<uchar> amplitudes_as_uchars_lut(256, 0);
+        double amplitude_scale_to_uchar = 255. / (params_.shared_params_.max_amplitude_value_ - params_.shared_params_.min_amplitude_value_);
+        for (std::size_t i = 0; i < std::min(std::size_t(256), radar_raw_meas.bins_.size()); ++i) {
+            double ampl_value = std::min(std::max(radar_raw_meas.bins_[i].amplitude_, params_.shared_params_.min_amplitude_value_), params_.shared_params_.max_amplitude_value_);
+            amplitudes_as_uchars_lut[i] = (uchar)((ampl_value - params_.shared_params_.min_amplitude_value_) * amplitude_scale_to_uchar);
+        }
+        cv::LUT(precalculated_radar_distance_map_in_bins_, amplitudes_as_uchars_lut, grey_map_);
+        //cv::imshow(std::string("radar-") + (char)('0' + radar_raw_meas.radar_index_), grey_map_);
+        return grey_map_;
     }
 
 private:
-    void makeMats(cv::Size map_size_in_pixels) {
-        for (int i = 0; i < c_NumOfRadars; ++i) {
-            precalculated_radar_distance_maps_in_bins_[i].create(map_size_in_pixels);
-            color_map_channels_[i].create(map_size_in_pixels);
-        }
-        color_map_.create(map_size_in_pixels);
-        heat_map_.create(map_size_in_pixels);
-    }
+    void onAfterParamsUpdate() {
+        pix2bins_converter_ = Pixels2BinsDistanceConverter(params_.shared_params_);
 
-    void makeRadarDistanceMap(cv::Mat_<uchar>& result_radar_distance_maps_in_bins, cv::Point2f const& radar_pos_in_m) const {
-        cv::Point radar_pos_in_pix = params_.workarea_map_.toPixels(radar_pos_in_m);
-        makePointDistanceMatrix(result_radar_distance_maps_in_bins, radar_pos_in_pix, pix2bins_converter_);
-    }
+        precalculated_radar_distance_map_in_bins_.create(params_.shared_params_.workarea_map_.getSizeInPixels());
+        cv::Point radar_pos_in_pix = params_.shared_params_.workarea_map_.toPixels(params_.radar_pos_in_m_);
+        makePointDistanceMatrix(precalculated_radar_distance_map_in_bins_, radar_pos_in_pix, pix2bins_converter_);
 
-    void plotMeas(RadarRawMeas const& radar_raw_meas) {
-        if (radar_raw_meas.radar_index_ < 0 || radar_raw_meas.radar_index_ >= c_NumOfRadars) {
-            std::cout << "Warning: got radar_index = " << radar_raw_meas.radar_index_ << std::endl;
-            //: do nothing:
-            return;
-        }
-        //fixme?
-        std::vector<uchar> amplitudes_as_uchars(256, 0);
-        double amplitude_scale_to_uchar = 255. / params_.radar_raw_frame_params_.max_amplitude_value_;
-        for (std::size_t i = 0; i < radar_raw_meas.bins_.size(); ++i) {
-            if (radar_raw_meas.bins_[i].amplitude_ < 0 || radar_raw_meas.bins_[i].amplitude_ > params_.radar_raw_frame_params_.max_amplitude_value_) {
-                std::cout << "Warning: got amplitude value = " << radar_raw_meas.bins_[i].amplitude_ << std::endl;
-                amplitudes_as_uchars[i] = 255;
-            } else
-                amplitudes_as_uchars[i] = (uchar)(radar_raw_meas.bins_[i].amplitude_ * amplitude_scale_to_uchar);
-        }
-        cv::LUT(precalculated_radar_distance_maps_in_bins_[radar_raw_meas.radar_index_], amplitudes_as_uchars, color_map_channels_[radar_raw_meas.radar_index_]);
-        //cv::imshow(radar_raw_meas.radar_index_ ? "radar_distance_maps_in_bins-1" : "radar_distance_maps_in_bins-0", precalculated_radar_distance_maps_in_bins_[radar_raw_meas.radar_index_]);
+        grey_map_.create(precalculated_radar_distance_map_in_bins_.size());
     }
 
 private:
@@ -323,13 +205,17 @@ private:
         double offset_in_pixels_;
         double bins_in_one_pixel_;
 
-        Pixels2BinsDistanceConverter(Params const& params) {
-            offset_in_pixels_ = params.radar_raw_frame_params_.first_bin_offset_in_m_ * params.workarea_map_.pixels_in_one_m_;
-            bins_in_one_pixel_ = 1. / (params.workarea_map_.pixels_in_one_m_ * params.radar_raw_frame_params_.bin_size_in_m_);
+        Pixels2BinsDistanceConverter() : offset_in_pixels_(0), bins_in_one_pixel_(0) {}
+
+        Pixels2BinsDistanceConverter(SharedParams const& shared_params) {
+            offset_in_pixels_ = shared_params.radar_raw_frame_params_.first_bin_offset_in_m_ * shared_params.workarea_map_.pixels_in_one_m_;
+            bins_in_one_pixel_ = 1. / (shared_params.workarea_map_.pixels_in_one_m_ * shared_params.radar_raw_frame_params_.bin_size_in_m_);
         }
 
-        double operator()(double distance_in_pixels) const {
-            return (distance_in_pixels - offset_in_pixels_) * bins_in_one_pixel_;
+        uchar operator()(double distance_in_pixels) const {
+            return (distance_in_pixels >= offset_in_pixels_)
+                ? (uchar)((distance_in_pixels - offset_in_pixels_) * bins_in_one_pixel_ + 0.5)
+                : uchar(0);
         }
     };
 
@@ -337,38 +223,134 @@ private:
 
     Pixels2BinsDistanceConverter pix2bins_converter_;
 
-    cv::Mat_<uchar> precalculated_radar_distance_maps_in_bins_[c_NumOfRadars];
+    cv::Mat_<uchar> precalculated_radar_distance_map_in_bins_;
+    cv::Mat_<uchar> grey_map_;
+};
+
+
+class MultiRadarMap2d {
+public:
+
+    struct Params {
+        SingleRadarMap2d::SharedParams shared_params_;
+        std::vector<cv::Point2f> radar_pos_in_m_;
+
+        Params() {}
+
+        void fromPropTree(PropTree const& prop_tree) {
+            shared_params_.fromPropTree(prop_tree.get_child("shared_params"));
+            BOOST_FOREACH(pt::ptree::value_type const& v, prop_tree.get_child("radars")) {
+                radar_pos_in_m_.push_back(v.second.get<cv::Point2f>("<xmlattr>.pos_in_m"));
+            }
+        }
+        void toPropTree(PropTree& prop_tree) const {
+            shared_params_.toPropTree(prop_tree.add("shared_params", ""));
+            PropTree& radars_prop_tree = prop_tree.add("radars", "");
+            BOOST_FOREACH(cv::Point2f const& v, radar_pos_in_m_) {
+                radars_prop_tree.add("radar", "").put("<xmlattr>.pos_in_m", v);
+            }
+        }
+    };
+
+    MultiRadarMap2d(Params const& params) : params_(params) {
+        onAfterParamsUpdate();
+    }
+
+    cv::Mat getColorMap() const { return color_map_; }
+
+    cv::Mat_<uchar> getHeatMap() const { return heat_map_; }
+
+    Params const& getParams() const { return params_; }
+
+    void setParams(Params const& params) {
+        params_ = params;
+        onAfterParamsUpdate();
+    }
+
+    void plotMeas(RadarRawMeasSet const& meas) {
+        for (std::size_t radar_index = 0; radar_index < meas.size(); ++radar_index) {
+            cv::Mat_<uchar> const& single_radar_heat_map = single_radar_maps_[radar_index].plotMeas(meas[radar_index]);
+            std::size_t channel_index = radar_index % 3;
+
+            if (radar_index < 3)
+                color_map_channels_[channel_index] = single_radar_heat_map;
+            else
+                color_map_channels_[channel_index] = cv::max(color_map_channels_[channel_index], single_radar_heat_map);
+
+            if (radar_index == 0)
+                heat_map_ = single_radar_heat_map.clone();
+            else
+                heat_map_ = cv::min(heat_map_, single_radar_heat_map);
+        }
+
+        cv::merge(color_map_channels_, 3, color_map_);
+    }
+
+private:
+    void onAfterParamsUpdate() {
+        makeMats(params_.shared_params_.workarea_map_.getSizeInPixels());
+
+        single_radar_maps_.resize(params_.radar_pos_in_m_.size());
+        for (std::size_t i = 0; i < params_.radar_pos_in_m_.size(); ++i)
+            single_radar_maps_[i].setParams(SingleRadarMap2d::Params(params_.shared_params_, params_.radar_pos_in_m_[i]));
+    }
+
+    void makeMats(cv::Size map_size_in_pixels) {
+        for (std::size_t i = 0; i < 3; ++i)
+            //color_map_channels_[i].create(map_size_in_pixels);
+            color_map_channels_[i] = cv::Mat_<uchar>::zeros(map_size_in_pixels);
+        color_map_.create(map_size_in_pixels);
+        heat_map_.create(map_size_in_pixels);
+    }
+
+private:
+    Params params_;
+
+    std::vector<SingleRadarMap2d> single_radar_maps_;
     cv::Mat_<uchar> color_map_channels_[3];
     cv::Mat_<cv::Vec3b> color_map_;
     cv::Mat_<uchar> heat_map_;
 };
 
-typedef RadarsMap2dT<2> TwoRadarsMap2d;
-typedef RadarsMap2dT<3> ThreeRadarsMap2d;
 
 
-class TwoAmplCsvFilesStream : public RadarRawMeasSetStreamBase {
+class AmplCsvFilesStream : public RadarRawMeasSetStreamBase {
 public:
-    TwoAmplCsvFilesStream(std::string const& radar0_amp_file_path, std::string const& radar1_amp_file_path)
-        : radar0_amp_file_(radar0_amp_file_path)
-        , radar1_amp_file_(radar1_amp_file_path)
-        , current_meas_set_(2)
+    struct Params {
+        std::vector<std::string> files_;
+
+        Params() {}
+
+        void fromPropTree(PropTree const& prop_tree) {
+            BOOST_FOREACH(pt::ptree::value_type const& v, prop_tree) {
+                files_.push_back(v.second.get<std::string>("<xmlattr>.path"));
+            }
+        }
+        void toPropTree(PropTree& prop_tree) const {
+            BOOST_FOREACH(std::string const& v, files_) {
+                prop_tree.add("file", "").put("<xmlattr>.path", v);
+            }
+        }
+    };
+
+    AmplCsvFilesStream(Params const& params)
+        : radar_ampl_files_(params.files_.size())
+        , current_meas_set_(radar_ampl_files_.size())
     {
-        current_meas_set_[0].radar_index_ = 0;
-        current_meas_set_[1].radar_index_ = 1;
+        for (std::size_t i = 0; i < params.files_.size(); ++i) {
+            radar_ampl_files_[i].open(params.files_[i].c_str());
+            current_meas_set_[i].radar_index_ = i;
+        }
     }
 
     virtual bool moveNext() {
         bool ok = true;
-        ok = ok && radar0_amp_file_.good();
-        ok = ok && radar1_amp_file_.good();
-        std::string csv_line0;
-        ok = ok && std::getline(radar0_amp_file_, csv_line0);
-        std::string csv_line1;
-        ok = ok && std::getline(radar1_amp_file_, csv_line1);
-        if (ok) {
-            readCsvLine(current_meas_set_[0], csv_line0, 1);
-            readCsvLine(current_meas_set_[1], csv_line1, 1);
+        std::string csv_line;
+        for (std::size_t i = 0; ok && i < radar_ampl_files_.size(); ++i) {
+            ok = ok && radar_ampl_files_[i].good();
+            ok = ok && std::getline(radar_ampl_files_[i], csv_line);
+            if (ok)
+                readCsvLine(current_meas_set_[i], csv_line, 1);
         }
         return ok;
     }
@@ -409,83 +391,126 @@ private:
     }
 
 private:
-    std::ifstream radar0_amp_file_;
-    std::ifstream radar1_amp_file_;
+    std::vector<std::ifstream> radar_ampl_files_;
     RadarRawMeasSet current_meas_set_;
 };
 
-void printHelp(char const* program_name) {
-    std::cout << "Usage:\n"
-        << program_name << " path_to_radar0_amplitudes.csv, path_to_radar1_amplitudes.csv" << std::endl;
+
+struct Params : MultiRadarMap2d::Params {
+    AmplCsvFilesStream::Params radar_ampl_files_;
+    int wait_between_frames_in_ms_;
+
+    Params() : wait_between_frames_in_ms_(330) {}
+    Params(PropTree const& prop_tree) : wait_between_frames_in_ms_(330) {
+        fromPropTree(prop_tree);
+    }
+
+    void fromPropTree(PropTree const& prop_tree) {
+        MultiRadarMap2d::Params::fromPropTree(prop_tree);
+        radar_ampl_files_.fromPropTree(prop_tree.get_child("files"));
+        wait_between_frames_in_ms_ = prop_tree.get("wait_between_frames_in_ms.<xmlattr>.v", wait_between_frames_in_ms_);
+    }
+    void toPropTree(PropTree& prop_tree) const {
+        MultiRadarMap2d::Params::toPropTree(prop_tree);
+        radar_ampl_files_.toPropTree(prop_tree.add("files", ""));
+        prop_tree.put("wait_between_frames_in_ms.<xmlattr>.v", wait_between_frames_in_ms_);
+    }
+
+    void addRadar(cv::Point2f pos_in_m, std::string const& path_to_ampl_file) {
+        MultiRadarMap2d::Params::radar_pos_in_m_.push_back(pos_in_m);
+        radar_ampl_files_.files_.push_back(path_to_ampl_file);
+    }
+};
+
+void printParams(Params const& params) {
+    PropTree prop_tree;
+    params.toPropTree(prop_tree.add("xethru_map2d", ""));
+    pt::write_xml(std::cout, prop_tree, pt::xml_writer_make_settings(' ', 2));
 }
 
-void printParams(char const* path_to_radar0_amplitudes, char const* path_to_radar1_amplitudes, TwoRadarsMap2d::Params const& params) {
-    std::cout << "Starting with following parameters:\n"
-        << "Files:\n"
-        << "    " << path_to_radar0_amplitudes << "\n"
-        << "    " << path_to_radar1_amplitudes << "\n"
-        << "Workarea Map:"
-        << "    X: [" << params.workarea_map_.map_min_x_in_m_ << ", " << params.workarea_map_.map_max_x_in_m_ << "]\n"
-        << "    Y: [" << params.workarea_map_.map_min_y_in_m_ << ", " << params.workarea_map_.map_max_y_in_m_ << "]\n"
-        << "    prixel size: " << 1 / params.workarea_map_.pixels_in_one_m_ << "\n"
-        << "Radars positions:"
-        << "    " << params.radar_pos_in_m_[0] << "\n"
-        << "    " << params.radar_pos_in_m_[1] << "\n"
-        << "Radars parameters:"
-        << "    bin_size_in_m: " << params.radar_raw_frame_params_.bin_size_in_m_ << "\n"
-        << "    first_bin_offset_in_m: " << params.radar_raw_frame_params_.first_bin_offset_in_m_ << "\n"
-        << "    max_amplitude_value: " << params.radar_raw_frame_params_.max_amplitude_value_ << "\n"
-        << std::endl;
+void printExampleParams() {
+    std::cout << "Example parameters:" << std::endl;
+    std::cout << "------ COPY FROM NEXT LINE -----" << std::endl;
+    PropTree prop_tree;
+    Params params;
+    params.addRadar(cv::Point2f(0, 0), "path/to/origin_amplitude_0.csv");
+    float radar_0_to_1_distance_in_m = (float)(48 * 0.0254);
+    params.addRadar(cv::Point2f(radar_0_to_1_distance_in_m, 0), "path/to/endpoint_amplitude_0.csv");
+    printParams(params);
 }
 
 
-int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cout << "Error: Incorrect number of arguments: " << (argc - 1) << std::endl;
-        printHelp(argv[0]);
-        return 1;
-    }
-    if (!boost::filesystem::exists(argv[1])) {
-        std::cout << "Error: File " << argv[1] << " does not exist." << std::endl;
-        printHelp(argv[0]);
-        return 1;
-    }
-    if (!boost::filesystem::exists(argv[2])) {
-        std::cout << "Error: File " << argv[2] << " does not exist." << std::endl;
-        printHelp(argv[0]);
-        return 1;
-    }
 
-    double radar_0_to_1_distance_in_m = 48 * 0.0254;
-    TwoRadarsMap2d::Params params;
-    params.radar_pos_in_m_[0] = cv::Point2f(0, 0);
-    params.radar_pos_in_m_[1] = cv::Point2f((float)radar_0_to_1_distance_in_m, 0);
-    params.workarea_map_.map_min_x_in_m_ = -6;
-    params.workarea_map_.map_max_x_in_m_ = 6;
-    params.workarea_map_.map_min_y_in_m_ = 0;
-    params.workarea_map_.map_max_y_in_m_ = 10;
-    printParams(argv[1], argv[2], params);
-
-    TwoAmplCsvFilesStream two_radars_stream(argv[1], argv[2]);
-    TwoRadarsMap2d radar_map(params);
-    cv::namedWindow("Radar map", cv::WINDOW_AUTOSIZE);
+void play(Params const& params) {
+    std::cout << "Starting with following parameters:" << std::endl;
+    printParams(params);
+    AmplCsvFilesStream multiradars_stream(params.radar_ampl_files_);
+    MultiRadarMap2d radars_map(params);
+    cv::namedWindow("Radars map", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("Radars heat map", cv::WINDOW_AUTOSIZE);
     int step_index = 0;
-    while (two_radars_stream.moveNext()) {
-        radar_map.plotMeas(two_radars_stream.getCurrent());
-        cv::imshow("Radar map", radar_map.getColorMap());
-        int key = cv::waitKey();
+    while (multiradars_stream.moveNext()) {
+        radars_map.plotMeas(multiradars_stream.getCurrent());
+        cv::imshow("Radars map", radars_map.getColorMap());
+        cv::imshow("Radars heat map", radars_map.getHeatMap());
+        int key = cv::waitKey(params.wait_between_frames_in_ms_);
         switch (key) {
-        case 27: return 0;
+        case 27: return;
         case 's': {
-            std::stringstream strstr;
-            strstr << "Radar_map_" << step_index << ".png";
-            cv::imwrite(strstr.str(), radar_map.getColorMap());
-        }
+                std::stringstream strstr;
+                strstr << "Radar_map_" << step_index << ".png";
+                cv::imwrite(strstr.str(), radars_map.getColorMap());
+                strstr.swap(std::stringstream());
+                strstr << "Radar_heat_map_" << step_index << ".png";
+                cv::imwrite(strstr.str(), radars_map.getColorMap());
+            }
             break;
         default:
             break;
         }
         ++step_index;
     }
+}
+
+void play(PropTree const& prop_tree) {
+    play(Params(prop_tree.get_child("xethru_map2d")));
+}
+
+void printHelp(char const* program_name) {
+    std::cout << "Usage:\n"
+        << program_name << " path_to_parameters.xml\n"
+        << "or\n"
+        << program_name << " path_to_parameters.info\n"
+        << std::endl;
+    printExampleParams();
+}
+
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cout << "Error: Incorrect number of arguments: " << (argc - 1) << std::endl;
+        printHelp(argv[0]);
+        return 1;
+    }
+    boost::filesystem::path path_to_params_file(argv[1]);
+    if (!boost::filesystem::exists(path_to_params_file)) {
+        std::cout << "Error: File " << argv[1] << " does not exist." << std::endl;
+        printHelp(argv[0]);
+        return 1;
+    }
+
+    PropTree prop_tree;
+    std::string file_ext = path_to_params_file.extension().string();
+    if (file_ext == ".xml")
+        pt::read_xml(path_to_params_file.string(), prop_tree);
+    else if (file_ext == ".info")
+        pt::read_info(path_to_params_file.string(), prop_tree);
+    else {
+        std::cout << "Error: Unknown file extension '" << file_ext << "'. Should be either .xml or .info." << std::endl;
+        printHelp(argv[0]);
+        return 1;
+    }
+
+    play(prop_tree);
     return 0;
 }
