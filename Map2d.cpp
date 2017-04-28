@@ -99,10 +99,56 @@ struct RadarRawMeas {
         Bin(double amplitude = 0) : amplitude_(amplitude) {}
     };
 
+    typedef std::vector<Bin> Bins;
+
     RadarRawMeas() : radar_index_(0) {}
 
     std::size_t radar_index_; //fixme: used for debug only
-    std::vector<Bin> bins_;
+    Bins bins_;
+};
+
+struct RadarAdaptiveClutterMap : RadarRawMeas {
+    struct Params {
+        double adaptive_factor_;
+        std::size_t spread_max_step_;
+
+        Params()
+            : adaptive_factor_(0.05)
+            , spread_max_step_(2)
+        {}
+    };
+
+    Params params_;
+
+    RadarAdaptiveClutterMap(Params const& p = Params()) : params_(p) {}
+
+    void setFirst(Bins const& raw_bins) { bins_ = raw_bins; }
+
+    void apply(Bins& in_out_raw_bins) {
+        if (bins_.size() != in_out_raw_bins.size()) {
+            //fixme? is this case ever happen?
+            //: reset the map
+            setFirst(in_out_raw_bins);
+            in_out_raw_bins = Bins(in_out_raw_bins.size());
+            return;
+        }
+        //: Update the adaptive cluttermap bins and calculate the result in_out_raw_bins:
+        for (std::size_t i = 0; i < in_out_raw_bins.size(); ++i) {
+            bins_[i].amplitude_ = bins_[i].amplitude_ * (1 - params_.adaptive_factor_) + in_out_raw_bins[i].amplitude_ * params_.adaptive_factor_;
+            in_out_raw_bins[i].amplitude_ -= bins_[i].amplitude_;
+        }
+        if (params_.spread_max_step_ > 0) {
+            Bins in_out_raw_bins_copy = in_out_raw_bins;
+            for (std::size_t i = 0; i < in_out_raw_bins.size(); ++i) {
+                std::size_t j_min = (i > params_.spread_max_step_) ? i - params_.spread_max_step_ : 0;
+                std::size_t j_max = std::min(i + params_.spread_max_step_ + 1, in_out_raw_bins.size());
+                double a = in_out_raw_bins_copy[i].amplitude_;
+                for (std::size_t j = j_min; j < j_max; ++j)
+                    a = std::max(a, in_out_raw_bins_copy[j].amplitude_);
+                in_out_raw_bins[i].amplitude_ = a;
+            }
+        }
+    }
 };
 
 typedef std::vector<RadarRawMeas> RadarRawMeasSet;
@@ -114,6 +160,7 @@ public:
     virtual RadarRawMeasSet const& getCurrent() const = 0;
 };
 
+#define XETHRU_DEFAULT_PRESENCE_THRESHOLD 0.0002
 
 class SingleRadarMap2d {
 public:
@@ -125,8 +172,8 @@ public:
         double max_amplitude_value_;
 
         SharedParams()
-            : min_amplitude_value_(0)
-            , max_amplitude_value_(0.1) //fixme?
+            : min_amplitude_value_(XETHRU_DEFAULT_PRESENCE_THRESHOLD / 10)
+            , max_amplitude_value_(XETHRU_DEFAULT_PRESENCE_THRESHOLD * 2)
         {}
 
         void fromPropTree(PropTree const& prop_tree) {
@@ -357,6 +404,9 @@ public:
 
     virtual RadarRawMeasSet const& getCurrent() const { return current_meas_set_; }
 
+protected:
+    RadarRawMeasSet& getMutableCurrent() { return current_meas_set_; }
+
 private:
     static void readCsvLine(RadarRawMeas& res, std::string const& csv_line, int start_field_index) {
         std::size_t field_start_pos = 0;
@@ -395,9 +445,53 @@ private:
     RadarRawMeasSet current_meas_set_;
 };
 
+class FilteredAmplCsvFilesStream : public AmplCsvFilesStream {
+public:
+    struct Params : AmplCsvFilesStream::Params {
+        RadarAdaptiveClutterMap::Params clutter_map_params_;
+
+        Params() {}
+
+        void fromPropTree(PropTree const& prop_tree) {
+            clutter_map_params_.adaptive_factor_ = prop_tree.get("<xmlattr>.adaptive_factor", clutter_map_params_.adaptive_factor_);
+            AmplCsvFilesStream::Params::fromPropTree(prop_tree);
+        }
+        void toPropTree(PropTree& prop_tree) const {
+            prop_tree.put("<xmlattr>.adaptive_factor", clutter_map_params_.adaptive_factor_);
+            AmplCsvFilesStream::Params::toPropTree(prop_tree);
+        }
+    };
+
+    FilteredAmplCsvFilesStream(Params const& params)
+        : AmplCsvFilesStream(params)
+        , radar_clutter_maps_(params.files_.size())
+    {
+        //: read first record for each radar and initialize the radar_clutter_maps_:
+        bool ok = AmplCsvFilesStream::moveNext();
+        if (ok) {
+            for (std::size_t i = 0; i < radar_clutter_maps_.size(); ++i) {
+                radar_clutter_maps_[i].setFirst(getCurrent()[i].bins_);
+            }
+        }
+    }
+
+    virtual bool moveNext() {
+        bool ok = AmplCsvFilesStream::moveNext();
+        if (ok) {
+            for (std::size_t i = 0; i < radar_clutter_maps_.size(); ++i) {
+                radar_clutter_maps_[i].apply(getMutableCurrent()[i].bins_);
+            }
+        }
+        return ok;
+    }
+
+private:
+    std::vector<RadarAdaptiveClutterMap> radar_clutter_maps_;
+};
+
 
 struct Params : MultiRadarMap2d::Params {
-    AmplCsvFilesStream::Params radar_ampl_files_;
+    FilteredAmplCsvFilesStream::Params radar_params_;
     int wait_between_frames_in_ms_;
 
     Params() : wait_between_frames_in_ms_(330) {}
@@ -407,18 +501,18 @@ struct Params : MultiRadarMap2d::Params {
 
     void fromPropTree(PropTree const& prop_tree) {
         MultiRadarMap2d::Params::fromPropTree(prop_tree);
-        radar_ampl_files_.fromPropTree(prop_tree.get_child("files"));
+        radar_params_.fromPropTree(prop_tree.get_child("files"));
         wait_between_frames_in_ms_ = prop_tree.get("wait_between_frames_in_ms.<xmlattr>.v", wait_between_frames_in_ms_);
     }
     void toPropTree(PropTree& prop_tree) const {
         MultiRadarMap2d::Params::toPropTree(prop_tree);
-        radar_ampl_files_.toPropTree(prop_tree.add("files", ""));
+        radar_params_.toPropTree(prop_tree.add("files", ""));
         prop_tree.put("wait_between_frames_in_ms.<xmlattr>.v", wait_between_frames_in_ms_);
     }
 
     void addRadar(cv::Point2f pos_in_m, std::string const& path_to_ampl_file) {
         MultiRadarMap2d::Params::radar_pos_in_m_.push_back(pos_in_m);
-        radar_ampl_files_.files_.push_back(path_to_ampl_file);
+        radar_params_.files_.push_back(path_to_ampl_file);
     }
 };
 
@@ -444,7 +538,7 @@ void printExampleParams() {
 void play(Params const& params) {
     std::cout << "Starting with following parameters:" << std::endl;
     printParams(params);
-    AmplCsvFilesStream multiradars_stream(params.radar_ampl_files_);
+    FilteredAmplCsvFilesStream multiradars_stream(params.radar_params_);
     MultiRadarMap2d radars_map(params);
     cv::namedWindow("Radars map", cv::WINDOW_AUTOSIZE);
     cv::namedWindow("Radars heat map", cv::WINDOW_AUTOSIZE);
@@ -462,7 +556,7 @@ void play(Params const& params) {
                 cv::imwrite(strstr.str(), radars_map.getColorMap());
                 strstr.swap(std::stringstream());
                 strstr << "Radar_heat_map_" << step_index << ".png";
-                cv::imwrite(strstr.str(), radars_map.getColorMap());
+                cv::imwrite(strstr.str(), radars_map.getHeatMap());
             }
             break;
         default:
